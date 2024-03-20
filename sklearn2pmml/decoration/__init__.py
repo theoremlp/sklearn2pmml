@@ -4,7 +4,7 @@ from sklearn.base import clone, BaseEstimator, TransformerMixin
 try:
 	# SkLearn 1.2.0+
 	from sklearn.base import OneToOneFeatureMixin
-except:
+except ImportError:
 	from sklearn.base import _OneToOneFeatureMixin as OneToOneFeatureMixin
 from sklearn2pmml import _is_pandas_categorical, _is_proto_pandas_categorical
 from sklearn2pmml.util import cast, common_dtype, is_1d, to_numpy
@@ -62,6 +62,11 @@ class MultiAlias(TransformerWrapper):
 
 	def get_feature_names_out(self, input_features = None):
 		return numpy.asarray(self.names)
+
+def _check_input(estimator, X, reset):
+	estimator._check_n_features(X, reset = reset)
+	estimator._check_feature_names(X, reset = reset)
+	return X
 
 def _check_cols(X, values):
 	if is_1d(X):
@@ -131,8 +136,8 @@ class Domain(BaseEstimator, TransformerMixin, OneToOneFeatureMixin):
 	def _missing_value_mask(self, X):
 		if self.missing_values is not None:
 			def is_missing(X, missing_value):
-				# float("NaN") != float("NaN")
-				if isinstance(missing_value, float) and numpy.isnan(missing_value):
+				# Values like float("NaN"), Numpy.NaN and Pandas.NA fail the '==' operator
+				if pandas.isnull(missing_value):
 					return pandas.isnull(X)
 				return X == missing_value
 
@@ -198,6 +203,7 @@ class Domain(BaseEstimator, TransformerMixin, OneToOneFeatureMixin):
 		return False
 
 	def transform(self, X):
+		_check_input(self, X, reset = False)
 		if self.dtype is not None:
 			X = cast(X, self.dtype)
 		missing_mask, valid_mask, invalid_mask = self._compute_masks(X)
@@ -253,6 +259,7 @@ class DiscreteDomain(Domain):
 		return super(DiscreteDomain, self)._valid_value_mask(X, where)
 
 	def fit(self, X, y = None):
+		_check_input(self, X, reset = True)
 		if self.dtype is not None:
 			if _is_proto_pandas_categorical(self.dtype):
 				if self.data_values is not None:
@@ -365,6 +372,7 @@ class ContinuousDomain(Domain):
 		return super(ContinuousDomain, self)._valid_value_mask(X, where)
 
 	def fit(self, X, y = None):
+		_check_input(self, X, reset = True)
 		if self.dtype is not None:
 			X = cast(X, self.dtype)
 		self.dtype_ = common_dtype(X)
@@ -372,10 +380,14 @@ class ContinuousDomain(Domain):
 			return self
 		X = to_numpy(X)
 		if self.with_data:
-			if issubclass(self.dtype_.type, numbers.Integral):
-				info = numpy.iinfo(self.dtype_)
+			dtype = self.dtype_
+			# Unbox Pandas' extension data type to Numpy data type
+			if hasattr(dtype, "numpy_dtype"):
+				dtype = dtype.numpy_dtype
+			if issubclass(dtype.type, numbers.Integral):
+				info = numpy.iinfo(dtype)
 			else:
-				info = numpy.finfo(self.dtype_)
+				info = numpy.finfo(dtype)
 			missing_mask = self._missing_value_mask(X)
 			nonmissing_mask = ~missing_mask
 			if self.data_min is None:
@@ -452,6 +464,7 @@ class TemporalDomain(Domain):
 			raise ValueError("Temporal data type {0} not in {1}".format(dtype, dtypes))
 
 	def fit(self, X, y = None):
+		_check_input(self, X, reset = True)
 		self.dtype_ = common_dtype(X)
 		return self
 
@@ -471,6 +484,7 @@ class MultiDomain(BaseEstimator, TransformerMixin):
 		self.domains = domains
 
 	def fit(self, X, y = None):
+		_check_input(self, X, reset = True)
 		rows, columns = X.shape
 		if len(self.domains) != columns:
 			raise ValueError("The number of columns {0} is not equal to the number of domain objects {1}".format(columns, len(self.domains)))
@@ -485,9 +499,8 @@ class MultiDomain(BaseEstimator, TransformerMixin):
 		return self
 
 	def transform(self, X):
+		_check_input(self, X, reset = False)
 		rows, columns = X.shape
-		if len(self.domains) != columns:
-			raise ValueError("The number of columns {0} is not equal to the number of domain objects {1}".format(columns, len(self.domains)))
 		# XXX
 		X = X.copy()
 		if isinstance(X, DataFrame):

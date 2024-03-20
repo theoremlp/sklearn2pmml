@@ -1,3 +1,181 @@
+# 0.104.1 #
+
+## Breaking changes
+
+* Removed `sklearn2pmml.ensemble.OrdinalClassifier` class.
+
+The uses of this class should be replaced with the uses of the `sklego.meta.OrdinalClassifier` class (see below), which implements exactly the same algorithm, and offers extra functionality such as calibration and parallelized fitting.
+
+## New features
+
+* Added support for `sklego.meta.OrdinalClassifier` class.
+
+``` python
+from pandas import CategoricalDtype, Series
+
+# A proper ordinal target
+y_bin = Series(_bin(y), dtype = CategoricalDtype(categories = [...], ordered = True), name = "bin(y)")
+
+classifier = OrdinalClassifier(LogisticRegression(), use_calibration = True, ...)
+# Map categories from objects to integer codes
+classifier.fit(X, (y_bin.cat).codes.values)
+
+# Store the categories mapping:
+# the `OrdinalClassifier.classes_` attribute holds integer codes, 
+# and the `OrdinalClassifier.pmml_classes_` holds the corresponding objects
+classifier.pmml_classes_ = y_bin.dtype.categories
+```
+
+See [Scikit-Lego-607](https://github.com/koaning/scikit-lego/issues/607)
+
+## Minor improvements and fixes
+
+* Removed the SkLearn-Pandas package from installation requirements.
+
+The `sklearn_pandas.DataFrameMapper` meta-transformer is giving way to the `sklearn.compose.ColumnTransformer` meta-transformer in most common pipelines.
+
+* Fixed the base-N encoding of missing values.
+
+This bug manifested itself when missing values were assigned to a category by itself.
+
+This bug was discovered when rebuilding integration tests with Category-Encoders 2.6(.3).
+It is currently unclear if the base-N encoding algorithm had its behaviour changed between Category-Encoders 2.5 and 2.6 development lines.
+
+In any case, when using SkLearn2PMML 0.104.1 or newer, it is advisable to upgrade to Category-Encoders 2.6.0 or newer.
+
+* Ensured compatibility with Category-Encoders 2.6.3, Imbalanced-Learn 0.12.0, OptBinning 0.19.0 and Scikit-Lego 0.7.4.
+
+
+# 0.104.0 #
+
+## Breaking changes
+
+* Updated Scikit-Learn installation requirement from `0.18+` to `1.0+`.
+
+This change helps the SkLearn2PMML package to better cope with breaking changes in Scikit-Learn APIs.
+The underlying [JPMML-SkLearn](https://github.com/jpmml/jpmml-sklear) library retains the maximum version coverage, because it is dealing with Scikit-Learn serialized state (Pickle/Joblib or Dill), which is considerably more stable.
+
+## New features
+
+* Added support for Scikit-Learn 1.4.X.
+
+The JPMML-SkLearn library integration tests were rebuilt with Scikit-Learn `1.4.0` and `1.4.1.post1` versions.
+All supported transformers and estimators passed cleanly.
+
+See [SkLearn2PMML-409](https://github.com/jpmml/sklearn2pmml/issues/409) and [JPMML-SkLearn-195](https://github.com/jpmml/jpmml-sklearn/issues/195)
+
+* Added support for `BaseHistGradientBoosting._preprocessor` attribute.
+
+This attribute gets initialized automatically if a `HistGradientBoostingClassifier` or `HistGradientBoostingRegressor` estimator is inputted with categorical features.
+
+In Scikit-Learn 1.0 through 1.3 it is necessary to pre-process categorical features manually.
+The indices of (ordinally-) encoded columns must be tracked and passed to the estimator using the `categorical_features` parameter:
+
+``` python
+from sklearn_pandas import DataFrameMapper
+from sklearn.preprocessing import OrdinalEncoder
+from sklearn2pmml.decoration import CategoricalDomain, ContinuousDomain
+
+mapper = DataFrameMapper(
+  [([cont_col], ContinuousDomain()) for cont_col in cont_cols] +
+  [([cat_col], [CategoricalDomain(), OrdinalEncoder()]) for cat_col in cat_cols]
+)
+
+regressor = HistGradientBoostingRegressor(categorical_features = [...])
+
+pipeline = Pipeline([
+  ("mapper", mapper),
+  ("regressor", regressor)
+])
+pipeline.fit(X, y)
+```
+
+In Scikit-Learn 1.4, this workflow simplifies to the following:
+
+``` python
+# Activate full Pandas' support by specifying `input_df = True` and `df_out = True` 
+mapper = DataFrameMapper(
+  [([cont_col], ContinuousDomain()) for cont_col in cont_cols] +
+  [([cat_col], CategoricalDomain(dtype = "category")) for cat_col in cat_cols]
+, input_df = True, df_out = True)
+
+# Auto-detect categorical features by their data type
+regressor = HistGradientBoostingRegressor(categorical_features = "from_dtype")
+
+pipeline = Pipeline([
+  ("mapper", mapper),
+  ("regressor", regressor)
+])
+pipeline.fit(X, y)
+
+# Print out feature type information
+# This list should contain one or more `True` values
+print(pipeline._final_estimator.is_categorical_)
+``` 
+
+## Minor improvements and fixes
+
+* Improved support for `ColumnTransformer.transformers` attribute.
+
+Column selection using dense boolean arrays.
+
+
+# 0.103.3 #
+
+## Breaking changes
+
+* Refactored the `PMMLPipeline.customize(customizations: [str])` method into `PMMLPipeline.customize(command: str, xpath_expr: str, pmml_element: str)`.
+
+This method may be invoked any number of times.
+Each invocation appends a `sklearn2pmml.customization.Customization` object to the `pmml_customizations_` attribute of the final estimator step.
+
+The `command` argument is one of SQL-inspired keywords `insert`, `update` or `delete` (to insert a new element, or to update or delete an existing element, respectively).
+The `xpath_expr` is an XML Path (XPath) expression for pinpointing the action site. The XPath expression is evaluated relative to the main model element.
+The `pmml_element` is a PMML fragment string.
+
+For example, suppressing the secondary results by deleting the `Output` element:
+
+``` python
+pipeline = PMMLPipeline([
+  ("classifier", ...)
+])
+pipeline.fit(X, y)
+pipeline.customize(command = "delete", xpath_expr = "//:Output")
+```
+
+## New features
+
+* Added `sklearn2pmml.metrics` module.
+
+This module provides high-level `BinaryClassifierQuality`, `ClassifierQuality` and `RegressorQuality` pmml classes for the automated generation of [`PredictiveModelQuality`](https://dmg.org/pmml/v4-4-1/ModelExplanation.html#xsdElement_PredictiveModelQuality) elements for most common estimator types.
+
+Refactoring the v0.103.0 code example:
+
+``` python
+from sklearn2pmml.metrics import ModelExplanation, RegressorQuality
+
+pipeline = PMMLPipeline([
+  ("regressor", ...)
+])
+pipeline.fit(X, y)
+
+model_explanation = ModelExplanation()
+predictive_model_quality = RegressorQuality(pipeline, X, y, target_field = y.name) \
+  .with_all_metrics()
+model_explanation.append(predictive_model_quality)
+
+pipeline.customize(command = "insert", pmml_element = model_explanation.tostring())
+```
+
+* Added `sklearn2pmml.util.pmml` module.
+
+## Minor improvements and fixes
+
+* Added `EstimatorProxy.classes_` propery.
+
+* Extracted `sklearn2pmml.configuration` and `sklearn2pmml.customization` modules.
+
+
 # 0.103.2 #
 
 ## Breaking changes

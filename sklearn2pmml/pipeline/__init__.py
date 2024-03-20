@@ -1,6 +1,8 @@
 from pandas import DataFrame, Series
 from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
 from sklearn.pipeline import Pipeline
+from sklearn2pmml.configuration import add_options, clear_options
+from sklearn2pmml.customization import add_customizations, clear_customizations, Customization
 from sklearn2pmml.util import to_numpy
 
 import numpy
@@ -54,21 +56,28 @@ class PMMLPipeline(Pipeline):
 		class_name = self.__class__.__name__
 		return "%s(steps=[%s])" % (class_name, (",\n" + (1 + len(class_name) // 2) * " ").join(repr(step) for step in self.steps))
 
-	def _fit(self, X, y = None, **fit_params):
-		# Collect feature name(s)
+	def _collect_metadata(self, X, y = None):
+		# Feature name(s)
 		active_fields = _get_column_names(X)
 		if active_fields is not None:
 			self.active_fields = active_fields
 		else:
 			warnings.warn("X is missing feature names. The reproducibility of predictions between Scikit-Learn and PMML can not be guaranteed")
-		# Collect label name(s)
+		# Label name(s)
 		target_fields = _get_column_names(y)
 		if target_fields is not None:
 			self.target_fields = target_fields
 		else:
 			if y is not None:
 				warnings.warn("y is missing target field name(s)")
-		return super(PMMLPipeline, self)._fit(X = X, y = y, **fit_params)
+
+	def fit(self, X, y = None, **fit_params):
+		self._collect_metadata(X = X, y = y)
+		return super(PMMLPipeline, self).fit(X = X, y = y, **fit_params)
+
+	def fit_transform(self, X, y = None, **fit_params):
+		self._collect_metadata(X = X, y = y)
+		return super(PMMLPipeline, self).fit_transform(X = X, y = y, **fit_params)
 
 	def _transform(self, X):
 		Xt = X
@@ -80,10 +89,6 @@ class PMMLPipeline(Pipeline):
 				if transform is not None:
 					Xt = transform.transform(Xt)
 		return Xt
-
-	def predict_proba(self, X, **predict_proba_params):
-		Xt = self._transform(X)
-		return self.steps[-1][-1].predict_proba(Xt, **predict_proba_params)
 
 	def apply(self, X):
 		Xt = self._transform(X)
@@ -115,13 +120,11 @@ class PMMLPipeline(Pipeline):
 			return numpy.hstack((y_apply, y_applyt))
 		return y_apply
 
-	def configure(self, **pmml_options):
-		if len(pmml_options) > 0:
-			estimator = self._final_estimator
-			while isinstance(estimator, Pipeline):
-				estimator = estimator._final_estimator
-			estimator.pmml_options_ = dict()
-			estimator.pmml_options_.update(pmml_options)
+	def _deep_final_estimator(self):
+		estimator = self._final_estimator
+		while hasattr(estimator, "_final_estimator"):
+			estimator = estimator._final_estimator
+		return estimator
 
 	def verify(self, X, predict_params = {}, predict_proba_params = {}, precision = 1e-13, zeroThreshold = 1e-13):
 		active_fields = _get_column_names(X)
@@ -132,7 +135,7 @@ class PMMLPipeline(Pipeline):
 		active_values = _get_values(X)
 		y = self.predict(X, **predict_params)
 		target_values = _get_values(y)
-		estimator = self._final_estimator
+		estimator = self._deep_final_estimator()
 		if isinstance(estimator, BaseEstimator):
 			if isinstance(estimator, RegressorMixin):
 				self.verification = _Verification(active_values, target_values, precision, zeroThreshold)
@@ -154,5 +157,17 @@ class PMMLPipeline(Pipeline):
 				self.verification = _Verification(active_values, target_values, precision, zeroThreshold)
 				self.verification.probability_values = probability_values
 
-	def customize(self, customizations):
-		self.customizations = numpy.asarray(customizations)
+	def configure(self, **options):
+		estimator = self._deep_final_estimator()
+		if len(options):
+			add_options(estimator, **options)
+		else:
+			clear_options(estimator)
+
+	def customize(self, command = "insert", xpath_expr = None, pmml_element = None):
+		estimator = self._deep_final_estimator()
+		if command:
+			customization = Customization(command = command, xpath_expr = xpath_expr, pmml_element = pmml_element)
+			add_customizations(estimator, [customization])
+		else:
+			clear_customizations(estimator)

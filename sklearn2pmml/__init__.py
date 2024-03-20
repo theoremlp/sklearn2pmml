@@ -1,18 +1,14 @@
 from pandas import CategoricalDtype
-from sklearn.base import BaseEstimator
-from sklearn.exceptions import NotFittedError
 try:
-	from sklearn.compose import ColumnTransformer
+	from sklearn_pandas import DataFrameMapper
 except ImportError:
-	class ColumnTransformer:
+	class DataFrameMapper(object):
 		pass
-try:
-	from sklearn.feature_selection._base import SelectorMixin
-except ImportError:
-	from sklearn.feature_selection.base import SelectorMixin
-from sklearn.feature_selection import SelectFromModel
+from sklearn.base import BaseEstimator
+from sklearn.compose import ColumnTransformer
+from sklearn.exceptions import NotFittedError
+from sklearn.feature_selection import SelectFromModel, SelectorMixin
 from sklearn.pipeline import FeatureUnion, Pipeline
-from sklearn_pandas import DataFrameMapper
 from sklearn2pmml.resources import _package_classpath
 from subprocess import PIPE, Popen
 from zipfile import ZipFile
@@ -25,7 +21,6 @@ import pandas
 import platform
 import re
 import sklearn
-import sklearn_pandas
 import tempfile
 import warnings
 
@@ -75,6 +70,10 @@ class EstimatorProxy(BaseEstimator):
 		for attr_name in self.attr_names:
 			if hasattr(self.estimator, attr_name):
 				setattr(self, attr_name, getattr(self.estimator, attr_name))
+
+	@property
+	def classes_(self):
+		return self.estimator.classes_
 
 	def fit(self, X, y = None, **fit_params):
 		self.estimator.fit(X, y, **fit_params)
@@ -273,7 +272,6 @@ def sklearn2pmml(estimator, pmml_path, with_repr = False, java_home = None, java
 		print("python: {0}".format(platform.python_version()))
 		print("sklearn2pmml: {0}".format(__version__))
 		print("sklearn: {0}".format(sklearn.__version__))
-		print("sklearn_pandas: {0}".format(sklearn_pandas.__version__))
 		print("pandas: {0}".format(pandas.__version__))
 		print("numpy: {0}".format(numpy.__version__))
 		print("dill: {0}".format(dill.__version__))
@@ -320,11 +318,11 @@ def sklearn2pmml(estimator, pmml_path, with_repr = False, java_home = None, java
 		output, error = process.communicate()
 		retcode = process.poll()
 		if debug or retcode:
-			if len(output) > 0:
+			if len(output):
 				print("Standard output:\n{0}".format(output))
 			else:
 				print("Standard output is empty")
-			if len(error) > 0:
+			if len(error):
 				print("Standard error:\n{0}".format(error))
 			else:
 				print("Standard error is empty")
